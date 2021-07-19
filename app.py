@@ -32,7 +32,7 @@ class ExecutionThread():
         self.input = input
         self.output = list()
         self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'Thread - {id}')
-        self.progress_bar = PROGRESS_BARS.counter(total = self.get_iterations(), desc=self.get_name(), unit="batches")
+        self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
         self.finished = False
 
     def start(self):
@@ -99,11 +99,14 @@ class ExecutionThread():
         return True
 
 
+
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
+extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
 
 data = list()
 
 for index, entry in df.iterrows():
+    extract_progress_bar.update()
     data.append(dict({
         "query_id": str(index),
         "street_address": str(entry[5]),
@@ -123,7 +126,6 @@ for i in range(THREADS):
 
 while not ExecutionThread.finished(threads):
     time.sleep(0.1)
-    pass
 
 PROGRESS_BARS.stop()
 print('\r\n')
