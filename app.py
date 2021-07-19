@@ -31,7 +31,7 @@ class ExecutionThread():
         self.id = id
         self.input = input
         self.output = list()
-        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'Thread - {id}')
+        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'{id}')
         self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
         self.finished = False
 
@@ -79,7 +79,16 @@ class ExecutionThread():
     def process(clz, target):
         
         for i in range(target.get_iterations()):
-            target.append(API.lookup_placekeys(target.get_input_subsection(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))))
+            section = target.get_input_subsection(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))
+            try:
+                target.append(API.lookup_placekeys(section))
+            except:
+                lst = list()
+
+                for entry in section:
+                    lst.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
+
+                target.append(lst)
             target.get_progress_bar().update()
         
         target.on_stop()
@@ -122,10 +131,12 @@ chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 for i in range(THREADS):
     threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
     threads[i].start()
-    time.sleep(0.1)
+    time.sleep(0.2)
+
+print('\r\n')
 
 while not ExecutionThread.finished(threads):
-    time.sleep(0.1)
+    time.sleep(1)
 
 PROGRESS_BARS.stop()
 print('\r\n')
@@ -137,7 +148,7 @@ for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
         values.append(e['placekey'])
     except KeyError:
         try:
-            values.append(['error'])
+            values.append(e['error'])
         except KeyError:
             values.append('')
 
