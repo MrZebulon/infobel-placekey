@@ -3,6 +3,7 @@ from placekey.api import PlacekeyAPI
 import math
 import threading
 import time
+import enlighten
 
 GLOBAL_RES = list()
 
@@ -15,9 +16,12 @@ FILE_IN = '{0}/{1}.csv'.format(PATH_IN, COUNTRY)
 FILE_OUT = '{0}/{1}_out.csv'.format(PATH_OUT, COUNTRY)
 
 ROWS = 1000
-BATCH_SIZE = 100
+BATCH_SIZE = 10
 THREADS = 10
 CHUNK_SIZE = math.ceil(ROWS / THREADS)
+
+PROGRESS_BARS = enlighten.get_manager()
+
 
 API  = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
 
@@ -26,8 +30,9 @@ class ExecutionThread():
     def __init__(self, id, input):
         self.id = id
         self.input = input
-        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'Thread - {id}')
         self.output = list()
+        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'Thread - {id}')
+        self.progress_bar = PROGRESS_BARS.counter(total = self.get_iterations(), desc=self.get_name(), unit="batches")
         self.finished = False
 
     def start(self):
@@ -42,6 +47,9 @@ class ExecutionThread():
     
     def get_id(self):
         return self.id
+
+    def get_name(self):
+        return self.thread.name
 
     def get_input(self):
         return self.input
@@ -58,17 +66,21 @@ class ExecutionThread():
     def size(self):
         return len(self.input)
 
+    def get_iterations(self):
+        return math.ceil(self.size() / BATCH_SIZE)
+
     def append(self, array):
         self.output.append(array)
+
+    def get_progress_bar(self):
+        return self.progress_bar
 
     @classmethod
     def process(clz, target):
         
-        iterations = math.ceil(target.size() / BATCH_SIZE)
-
-        for i in range(iterations):
-            print(f"{target.get_id()} > Batch #{i + 1}/{iterations}")
+        for i in range(target.get_iterations()):
             target.append(API.lookup_placekeys(target.get_input_subsection(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))))
+            target.get_progress_bar().update()
         
         target.on_stop()
 
@@ -107,10 +119,14 @@ chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 for i in range(THREADS):
     threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
     threads[i].start()
-    time.sleep(0.2)
+    time.sleep(0.1)
 
 while not ExecutionThread.finished(threads):
     pass
+
+PROGRESS_BARS.stop()
+print('\r\n')
+
 
 values = list()
 for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
