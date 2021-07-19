@@ -122,6 +122,7 @@ for i in range(THREADS):
     time.sleep(0.1)
 
 while not ExecutionThread.finished(threads):
+    time.sleep(0.1)
     pass
 
 PROGRESS_BARS.stop()
