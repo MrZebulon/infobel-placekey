@@ -1,112 +1,125 @@
-# To add a new cell, type '# %%'
-# To add a new markdown cell, type '# %% [markdown]'
-# %%
 import pandas as pd
 from placekey.api import PlacekeyAPI
-import time
 import math
+import threading
 
-# %% [Progress Bar]
+GLOBAL_RES = list()
 
-def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
-    
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
-    filledLength = int(length * iteration // total)
-    
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end = printEnd)
-    # Print New Line on Complete
-    if iteration == total: 
-        print()
-
-
-# %% [Constants]
 COUNTRY = "small-US"
 ISO_CODE = "us"
-SIZE = 1000
-BATCH_SIZE = 10
-ITERATIONS = math.ceil(SIZE / BATCH_SIZE)
+
 PATH_IN= "./res"
 PATH_OUT= "./out"
-
 FILE_IN = '{0}/{1}.csv'.format(PATH_IN, COUNTRY)
 FILE_OUT = '{0}/{1}_out.csv'.format(PATH_OUT, COUNTRY)
 
+ROWS = 1000
+BATCH_SIZE = 10
+THREADS = 10
+CHUNK_SIZE = math.ceil(ROWS / THREADS)
 
-# %% [Extracting]
-start_time = time.perf_counter()
-print("Begining Extraction")
+API  = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
 
-pk = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
+class ExecutionThread():
+
+    def __init__(self, id, input):
+        self.id = id
+        self.input = input
+        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'Thread - {id}')
+        self.output = list()
+        self.finished = False
+
+    def start(self):
+        self.thread.start()
+
+    def on_stop(self):
+        for set in self.output:
+            for _, entry in enumerate(set):
+                GLOBAL_RES.append(entry)
+
+        self.finished = True
+    
+    def get_id(self):
+        return self.id
+
+    def get_input(self):
+        return self.input
+
+    def get_input_subsection(self, lower, higher):
+        return self.input[lower:higher]
+
+    def get_output(self):
+        return self.output
+
+    def is_finished(self):
+        return self.finished
+    
+    def size(self):
+        return len(self.input)
+
+    def append(self, array):
+        self.output.append(array)
+
+    @classmethod
+    def process(clz, target):
+        
+        iterations = math.ceil(target.size() / BATCH_SIZE)
+
+        for i in range(iterations):
+            print(f"{target.get_id()} > Batch #{i + 1}/{iterations}")
+            target.append(API.lookup_placekeys(target.get_input_subsection(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))))
+        
+        target.on_stop()
+
+        return
+
+    @classmethod
+    def get_chunks(clz, input, sub_size):
+        for i in range(0, len(input), sub_size):
+            yield input[i:i + sub_size]
+
+    @classmethod
+    def finished(clz, thread_lst):
+        for thread in thread_lst:
+            if not thread.is_finished():
+                return False
+        return True
+
+
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
-raw = [tuple(x) for x in df.values]
-
-print(f"Extraction successfull - {int(time.perf_counter() - start_time)}\r\n")
-
-
-
-# %% [Pre-Procesing]
-
-start_time = time.perf_counter()
-print("Begining Pre-Processing")
 
 data = list()
 
-printProgressBar(0, len(raw), prefix=f"Entry #0/{len(raw)}")
-for i in range(len(raw)):
-    printProgressBar(i+1, len(raw), prefix=f"Entry #{i+1}/{len(raw)}")
-
-    entry = raw[i]
-
+for index, entry in df.iterrows():
     data.append(dict({
-        "query_id": str(entry[0]),
-        "street_address": str(entry[1]),
-        "postal_code": str(entry[2]),
-        "city": str(entry[3]),
-        "region": str(entry[4]),
+        "query_id": str(index),
+        "street_address": str(entry[5]),
+        "postal_code": str(entry[6]),
+        "city": str(entry[7]),
+        "region": str(entry[8]),
         "iso_country_code": ISO_CODE
     }))
 
-print(f"Pre-Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
+threads = list()
+chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 
-# %% [Processing]
-start_time = time.perf_counter()
-print("Begining Processing")
+for i in range(THREADS):
+    threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
+    threads[i].start()
 
-res = list()
+while not ExecutionThread.finished(threads):
+    pass
 
-printProgressBar(0, ITERATIONS, prefix=f"Batch #0/{ITERATIONS}", suffix=f"(batch size: {SIZE}")
-for i in range(ITERATIONS):
-    printProgressBar(i + 1, ITERATIONS, prefix=f"Batch #{i + 1}/{ITERATIONS}", suffix=f"Batch Size: {min((i + 1) * BATCH_SIZE, SIZE) - i * BATCH_SIZE}, Time Spent : {int(time.perf_counter() - start_time)} sec")
-    res.append(pk.lookup_placekeys(data[i * BATCH_SIZE:min((i + 1) * BATCH_SIZE, SIZE)]))
-
-print(f"Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
-
-
-# %% [Post-Processing]
-
-start_time = time.perf_counter()
-print("Begining Post-Processing")
-
-values = dict()
-
-printProgressBar(0, SIZE, prefix=f"Entry #0/{SIZE}")
-for i in range(ITERATIONS):
-    for j in range(len(res[i])):
-        
-        index = i * BATCH_SIZE + j
-        printProgressBar(index, SIZE, prefix=f"Entry #{index}/{SIZE}")
-
+values = list()
+for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
+    try:
+        values.append(e['placekey'])
+    except KeyError:
         try:
-            values[index] = res[i][j]["placekey"]
+            values.append(['error'])
         except KeyError:
-            try:
-                values[index] = res[i][j]["error"]
-            except KeyError:
-                values[index] = ''
+            values.append('')
 
-df["placekey"] = values.values()
+df["placekey"] = values
 
 df.to_csv(FILE_OUT)
-
-print(f"Post-Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
