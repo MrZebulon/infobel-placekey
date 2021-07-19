@@ -2,6 +2,7 @@ import pandas as pd
 from placekey.api import PlacekeyAPI
 import math
 import threading
+import time
 
 GLOBAL_RES = list()
 
@@ -14,7 +15,7 @@ FILE_IN = '{0}/{1}.csv'.format(PATH_IN, COUNTRY)
 FILE_OUT = '{0}/{1}_out.csv'.format(PATH_OUT, COUNTRY)
 
 ROWS = 1000
-BATCH_SIZE = 10
+BATCH_SIZE = 100
 THREADS = 10
 CHUNK_SIZE = math.ceil(ROWS / THREADS)
 
@@ -106,6 +107,7 @@ chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 for i in range(THREADS):
     threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
     threads[i].start()
+    time.sleep(0.2)
 
 while not ExecutionThread.finished(threads):
     pass
