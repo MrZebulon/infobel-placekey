@@ -1,29 +1,59 @@
 import pandas as pd
 from placekey.api import PlacekeyAPI
-import math
-import threading
-import time
 import enlighten
+import math, threading, time, os, pathlib, json
 
 GLOBAL_RES = list()
 
+COL_OFFSET = 4
+
 COUNTRY = "small-US"
-ISO_CODE = "us"
+ISO_CODE = "US"
 
 PATH_IN= "./res"
 PATH_OUT= "./out"
-FILE_IN = '{0}/{1}.csv'.format(PATH_IN, COUNTRY)
-FILE_OUT = '{0}/{1}_out.csv'.format(PATH_OUT, COUNTRY)
+PATH_TEMP= "./temp"
+
+FILE_IN = f'{PATH_IN}/{COUNTRY}.csv'
+FILE_OUT = f'{PATH_OUT}/{COUNTRY}_out.csv'
 
 ROWS = 1000
-BATCH_SIZE = 10
-THREADS = 10
+BATCH_SIZE = 250
+THREADS = 2
 CHUNK_SIZE = math.ceil(ROWS / THREADS)
 
 PROGRESS_BARS = enlighten.get_manager()
 
-
 API  = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
+
+class TempWrapper():
+    
+    def __init__(self, file_name):
+        self.path = f'{PATH_TEMP}/{file_name}.json'
+        
+        if not os.path.isfile(self.path):
+            open(self.path, 'a').close()
+
+        if os.stat(self.path).st_size == 0:
+            with open(self.path, 'w') as f:
+                json.dump({}, f)
+
+        with open(self.path, 'r') as f:
+            self.blocks = json.load(f)
+    
+    def get_block(self, id):
+        try:
+            return self.blocks[str(id)]
+        except:
+            return None
+
+    def new_block(self, block):
+        id = block[0]['query_id']
+        self.blocks[id] = block
+
+    def save(self):
+        with open(self.path, 'w') as f:
+            json.dump(self.blocks, f)
 
 class ExecutionThread():
 
@@ -34,6 +64,7 @@ class ExecutionThread():
         self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'{id}')
         self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
         self.finished = False
+        self.temp = TempWrapper(id)
 
     def start(self):
         self.thread.start()
@@ -54,11 +85,17 @@ class ExecutionThread():
     def get_input(self):
         return self.input
 
-    def get_input_subsection(self, lower, higher):
+    def get_section(self, lower, higher):
         return self.input[lower:higher]
 
     def get_output(self):
         return self.output
+
+    def get_temp(self):
+        return self.temp
+
+    def get_progress_bar(self):
+        return self.progress_bar
 
     def is_finished(self):
         return self.finished
@@ -72,42 +109,52 @@ class ExecutionThread():
     def append(self, array):
         self.output.append(array)
 
-    def get_progress_bar(self):
-        return self.progress_bar
-
-    @classmethod
-    def process(clz, target):
+    @staticmethod
+    def process(target):
         
         for i in range(target.get_iterations()):
-            section = target.get_input_subsection(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))
+
+            target.get_progress_bar().update()
+
+            section = target.get_section(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))
+            block = target.get_temp().get_block(section[0]['query_id'])
+
+            if block is not None:
+                target.append(block)
+                continue
+        
             try:
-                target.append(API.lookup_placekeys(section))
+                lookup = API.lookup_placekeys(section)
+                target.append(lookup)
+
+                target.get_temp().new_block(lookup)
+                target.get_temp().save()
             except:
+
                 lst = list()
 
                 for entry in section:
                     lst.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
 
                 target.append(lst)
-            target.get_progress_bar().update()
-        
+       
         target.on_stop()
 
         return
 
-    @classmethod
-    def get_chunks(clz, input, sub_size):
+    @staticmethod
+    def get_chunks(input, sub_size):
         for i in range(0, len(input), sub_size):
             yield input[i:i + sub_size]
 
-    @classmethod
-    def finished(clz, thread_lst):
+    @staticmethod
+    def finished(thread_lst):
         for thread in thread_lst:
             if not thread.is_finished():
                 return False
         return True
 
-
+# Execution
 
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
 extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
@@ -118,10 +165,10 @@ for index, entry in df.iterrows():
     extract_progress_bar.update()
     data.append(dict({
         "query_id": str(index),
-        "street_address": str(entry[5]),
-        "postal_code": str(entry[6]),
-        "city": str(entry[7]),
-        "region": str(entry[8]),
+        "street_address": str(entry[1 + COL_OFFSET]),
+        "postal_code": str(entry[2 + COL_OFFSET]),
+        "city": str(entry[3 + COL_OFFSET]),
+        "region": str(entry[4 + COL_OFFSET]),
         "iso_country_code": ISO_CODE
     }))
 
@@ -131,16 +178,14 @@ chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 for i in range(THREADS):
     threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
     threads[i].start()
-    time.sleep(0.2)
 
 print('\r\n')
 
 while not ExecutionThread.finished(threads):
-    time.sleep(1)
+    pass
 
 PROGRESS_BARS.stop()
 print('\r\n')
-
 
 values = list()
 for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
@@ -155,3 +200,5 @@ for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
 df["placekey"] = values
 
 df.to_csv(FILE_OUT)
+
+[f.unlink() for f in pathlib.Path(PATH_TEMP).glob("*") if f.is_file()] 
