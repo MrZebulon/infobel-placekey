@@ -21,7 +21,8 @@ PATH_TEMP= "./temp"
 FILE_IN = f'{PATH_IN}/{COUNTRY}.csv'
 FILE_OUT = f'{PATH_OUT}/{COUNTRY}_' + '{0}' + '_out.csv'
 
-ROWS = 1000
+ROWS = 900
+ROWS_OFFSET = 100
 BATCH_SIZE = 250
 MAX_THREADS = 2
 
@@ -58,11 +59,11 @@ def process(index, batch, data, progression):
 
 
 def get_batch(input, index):
-    return input[index * BATCH_SIZE:(i+1) *BATCH_SIZE]
+    return input[ROWS_OFFSET + index * BATCH_SIZE: ROWS_OFFSET + (index+1) *BATCH_SIZE]
 
 
 def get_sub_dataframe(dataframe, index):
-    return dataframe.iloc[index * BATCH_SIZE :(index + 1) * BATCH_SIZE, :]
+    return dataframe.iloc[ROWS_OFFSET + index * BATCH_SIZE: ROWS_OFFSET + (index+1) *BATCH_SIZE, : ]
 
 #Execution
 
@@ -71,7 +72,7 @@ extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction",
 
 data = list()
 
-for index, entry in df.iterrows():
+for index, entry in df.iloc[ROWS_OFFSET : ROWS_OFFSET + ROWS, : ].iterrows():
     extraction_progress_bar.update()
     data.append(dict({
         "query_id": str(index),
