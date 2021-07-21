@@ -1,7 +1,7 @@
 import pandas as pd
 from placekey.api import PlacekeyAPI
 import enlighten
-import math, pathlib, os, json
+import math, pathlib, os, json, time
 from concurrent.futures.thread import ThreadPoolExecutor
 from concurrent.futures import as_completed
 #PARAMS
@@ -20,8 +20,9 @@ FILE_OUT = f'{PATH_OUT}/{COUNTRY}_out.csv'
 
 ROWS = 1000
 BATCH_SIZE = 250
-THREADS = 2
-CHUNK_SIZE = math.ceil(ROWS / THREADS)
+MAX_THREADS = 2
+
+BATCHES = math.ceil(ROWS / BATCH_SIZE)
 
 #CONSTS
 
@@ -33,18 +34,16 @@ PROGRESS_BARS = enlighten.get_manager()
 
 class TempWrapper():
     
-    def __init__(self, id):
-        self.path = f'{PATH_TEMP}/Thread - {id}.json'
-        
-        if not os.path.isfile(self.path):
-            open(self.path, 'a').close()
+    def __init__(self):
+        self.path = f'{PATH_TEMP}/computed.json'
 
-        if os.stat(self.path).st_size == 0:
-            with open(self.path, 'w') as f:
+        with open(self.path, 'w+') as f:
+
+            if os.stat(self.path).st_size == 0:
                 json.dump({}, f)
-
-        with open(self.path, 'r') as f:
-            self.blocks = json.load(f)
+                self.blocks = dict()
+            else:
+                self.blocks = json.load(f)
     
     def get_block(self, id):
         try:
@@ -60,55 +59,38 @@ class TempWrapper():
         with open(self.path, 'w') as f:
             json.dump(self.blocks, f)
 
-def process(chunk, index):
+def process(batch, wrapper, progression):
+        
+    block = wrapper.get_block(batch[0]['query_id'])
+
+    if block is not None:
+        return block
+
+    lookup = list()
+
+    try:
+        lookup = API.lookup_placekeys(batch)
+
+    except:
+        for _ in len(batch):
+            lookup.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
     
-    res = list()
+    progression.update()
 
-    wrapper = TempWrapper(index)
-    iterations = math.ceil(len(chunk) / BATCH_SIZE)
+    return lookup 
 
-    progress_bar = PROGRESS_BARS.counter(total=iterations, desc=f"Processing > Worker {index}", unit="batches")
-    
-    for i in range(iterations):
-
-        progress_bar.update()
-
-        section = chunk[i * BATCH_SIZE:(i+1) * BATCH_SIZE]
-        block = wrapper.get_block(section[0]['query_id'])
-
-        lookup = list()
-
-        if block is not None:
-            lookup = block
-            res.append(lookup)
-            continue
-
-        try:
-            lookup = API.lookup_placekeys(section)
-
-        except:
-            for entry in section:
-                lookup.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
-
-        res.append(lookup)
-        wrapper.new_block(lookup)
-        wrapper.save()
-
-    return res 
-
-def get_chunks(input, sub_size):
-    for i in range(0, len(input), sub_size):
-        yield input[i:i + sub_size]
+def get_batch(input, index):
+    return input[index * BATCH_SIZE:(i+1) *BATCH_SIZE]
 
 #Execution
 
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
-extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
+extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
 
 data = list()
 
 for index, entry in df.iterrows():
-    extract_progress_bar.update()
+    extraction_progress_bar.update()
     data.append(dict({
         "query_id": str(index),
         "street_address": str(entry[1 + COL_OFFSET]),
@@ -118,27 +100,24 @@ for index, entry in df.iterrows():
         "iso_country_code": ISO_CODE
     }))
 
-
-
-chunks = list(get_chunks(data, CHUNK_SIZE))
-
 futures = []
 
-with ThreadPoolExecutor(max_workers=THREADS) as executor:
+processing_progression_bar = PROGRESS_BARS.counter(total = ROWS, desc="Processing", unit="entries", color="white")
 
-    for i, chunk in enumerate(chunks):
-        futures.append(executor.submit(process, chunk, i))
+with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+
+    wrapper = TempWrapper()
+    for i in range(BATCHES):
+        futures.append(executor.submit(process, get_batch(data, i), wrapper, processing_progression_bar))
         
 
 res = list()
 for future in as_completed(futures):
     for iteration in future.result():
-        for elem in iteration:
-            res.append(elem)
+        res.append(iteration)
 
 values = list()
-
-for i, e in enumerate(res):
+for i, e in enumerate(sorted(res, key=lambda x: x['query_id'])):
     try:
         values.append(e['placekey'])
     except KeyError:
