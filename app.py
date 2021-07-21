@@ -96,6 +96,9 @@ class ExecutionThread():
     def append(self, array):
         self.output.append(array)
 
+    def get_thread(self):
+        return self.thread
+
     @staticmethod
     def process(target):
         
@@ -159,7 +162,7 @@ for i in range(THREADS):
     threads[i].start()
 
 for thread in threads:
-    thread.join()
+    thread.get_thread().join()
 
 PROGRESS_BARS.stop()
 print('\r\n')
