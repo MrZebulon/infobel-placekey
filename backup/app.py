@@ -1,114 +1,183 @@
-# To add a new cell, type '# %%'
-# To add a new markdown cell, type '# %% [markdown]'
-# %%
 import pandas as pd
 from placekey.api import PlacekeyAPI
-import time
-import math
+import enlighten
+import math, threading, os, pathlib, json
 
-# %% [Progress Bar]
+GLOBAL_RES = list()
 
-def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
-    
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
-    filledLength = int(length * iteration // total)
-    
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end = printEnd)
-    # Print New Line on Complete
-    if iteration == total: 
-        print()
+COL_OFFSET = 4
 
-
-# %% [Constants]
 COUNTRY = "small-US"
-ISO_CODE = "us"
-SIZE = 300
-BATCH_SIZE = 150
-ITERATIONS = math.ceil(SIZE / BATCH_SIZE)
-PATH_IN= "../res"
-PATH_OUT= "../out"
+ISO_CODE = "US"
 
-FILE_IN = '{0}/{1}.csv'.format(PATH_IN, COUNTRY)
-FILE_OUT = '{0}/{1}_out.csv'.format(PATH_OUT, COUNTRY)
+PATH_IN= "./res"
+PATH_OUT= "./out"
+PATH_TEMP= "./temp"
+
+FILE_IN = f'{PATH_IN}/{COUNTRY}.csv'
+FILE_OUT = f'{PATH_OUT}/{COUNTRY}_out.csv'
+
+ROWS = 1000
+BATCH_SIZE = 250
+THREADS = 2
+CHUNK_SIZE = math.ceil(ROWS / THREADS)
+
+PROGRESS_BARS = enlighten.get_manager()
+
+API  = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
+
+class TempWrapper():
+    
+    def __init__(self, file_name):
+        self.path = f'{PATH_TEMP}/{file_name}.json'
+        
+        if not os.path.isfile(self.path):
+            open(self.path, 'a').close()
+
+        if os.stat(self.path).st_size == 0:
+            with open(self.path, 'w') as f:
+                json.dump({}, f)
+
+        with open(self.path, 'r') as f:
+            self.blocks = json.load(f)
+    
+    def get_block(self, id):
+        try:
+            return self.blocks[str(id)]
+        except:
+            return None
+
+    def new_block(self, block):
+        id = block[0]['query_id']
+        self.blocks[id] = block
+
+    def save(self):
+        with open(self.path, 'w') as f:
+            json.dump(self.blocks, f)
+
+class ExecutionThread():
+
+    def __init__(self, id, input):
+        self.id = id
+        self.input = input
+        self.output = list()
+        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'{id}')
+        self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
+
+    def start(self):
+        self.thread.start()
+    
+    def join(self):
+        self.thread.join()
+
+    def on_stop(self):
+        for set in self.output:
+            for _, entry in enumerate(set):
+                GLOBAL_RES.append(entry)
+    
+    def get_id(self):
+        return self.id
+
+    def get_name(self):
+        return self.thread.name
+
+    def get_input(self):
+        return self.input
+
+    def get_section(self, lower, higher):
+        return self.input[lower:higher]
+
+    def get_output(self):
+        return self.output
+    
+    def size(self):
+        return len(self.input)
+
+    def get_iterations(self):
+        return math.ceil(self.size() / BATCH_SIZE)
+
+    def append(self, array):
+        self.output.append(array)
+
+    @staticmethod
+    def process(target):
+        
+        for i in range(target.get_iterations()):
+
+            target.get_progress_bar().update()
+
+            section = target.get_section(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))
+            block = target.get_temp().get_block(section[0]['query_id'])
+
+            if block is not None:
+                target.append(block)
+                continue
+        
+            try:
+                lookup = API.lookup_placekeys(section)
+                target.append(lookup)
+
+                target.get_temp().new_block(lookup)
+                target.get_temp().save()
+            except:
+                lst = list()
+
+                for entry in section:
+                    lst.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
+
+                target.append(lst)
+       
+        target.on_stop()
+
+        return
+
+    @staticmethod
+    def get_chunks(input, sub_size):
+        for i in range(0, len(input), sub_size):
+            yield input[i:i + sub_size]
 
 
-# %% [Extracting]
-start_time = time.perf_counter()
-print("Begining Extraction")
-
-pk = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
-raw = [tuple(x) for x in df.values]
-
-print(f"Extraction successfull - {int(time.perf_counter() - start_time)}\r\n")
-
-
-
-# %% [Pre-Procesing]
-
-start_time = time.perf_counter()
-print("Begining Pre-Processing")
+extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
 
 data = list()
 
-printProgressBar(0, len(raw), prefix=f"Entry #0/{len(raw)}")
-for i in range(len(raw)):
-    printProgressBar(i+1, len(raw), prefix=f"Entry #{i+1}/{len(raw)}")
-
-    entry = raw[i]
-
+for index, entry in df.iterrows():
+    extract_progress_bar.update()
     data.append(dict({
-        "query_id": str(entry[0]),
-        "street_address": str(entry[1]),
-        "postal_code": str(entry[2]),
-        "city": str(entry[3]),
-        "region": str(entry[4]),
+        "query_id": str(index),
+        "street_address": str(entry[1 + COL_OFFSET]),
+        "postal_code": str(entry[2 + COL_OFFSET]),
+        "city": str(entry[3 + COL_OFFSET]),
+        "region": str(entry[4 + COL_OFFSET]),
         "iso_country_code": ISO_CODE
     }))
 
-print(f"Pre-Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
+threads = list()
+chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 
-# %% [Processing]
-start_time = time.perf_counter()
-print("Begining Processing")
+for i in range(THREADS):
+    threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
+    threads[i].start()
 
-res = list()
+for thread in threads:
+    thread.join()
 
-printProgressBar(0, ITERATIONS, prefix=f"Batch #0/{ITERATIONS}", suffix=f"(batch size: {SIZE}")
-for i in range(ITERATIONS):
-    printProgressBar(i + 1, ITERATIONS, prefix=f"Batch #{i + 1}/{ITERATIONS}", suffix=f"Batch Size: {min((i + 1) * BATCH_SIZE, SIZE) - i * BATCH_SIZE}, Time Spent : {int(time.perf_counter() - start_time)} sec")
-    res.append(pk.lookup_placekeys(data[i * BATCH_SIZE:min((i + 1) * BATCH_SIZE, SIZE)]))
+PROGRESS_BARS.stop()
+print('\r\n')
 
-print(f"Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
-
-
-# %% [Post-Processing]
-
-start_time = time.perf_counter()
-print("Begining Post-Processing")
-
-values = dict()
-
-printProgressBar(0, SIZE, prefix=f"Entry #0/{SIZE}")
-for i in range(ITERATIONS):
-    for j in range(len(res[i])):
-        
-        index = i * BATCH_SIZE + j
-        printProgressBar(index, SIZE, prefix=f"Entry #{index}/{SIZE}")
-
+values = list()
+for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
+    try:
+        values.append(e['placekey'])
+    except KeyError:
         try:
-            values[index] = res[i][j]["placekey"]
+            values.append(e['error'])
         except KeyError:
-            try:
-                values[index] = res[i][j]["error"]
-            except KeyError:
-                values[index] = ''
+            values.append('')
 
-print(values)
-
-df["placekey"] = values.values()
+df["placekey"] = values
 
 df.to_csv(FILE_OUT)
 
-print(f"Post-Processing successfull - {int(time.perf_counter() - start_time)}\r\n")
+[f.unlink() for f in pathlib.Path(PATH_TEMP).glob("*") if f.is_file()] 

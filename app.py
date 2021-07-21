@@ -1,9 +1,10 @@
 import pandas as pd
 from placekey.api import PlacekeyAPI
 import enlighten
-import math, threading, time, os, pathlib, json
-
-GLOBAL_RES = list()
+import math, pathlib, os, json
+from concurrent.futures.thread import ThreadPoolExecutor
+from concurrent.futures import as_completed
+#PARAMS
 
 COL_OFFSET = 4
 
@@ -22,14 +23,18 @@ BATCH_SIZE = 250
 THREADS = 2
 CHUNK_SIZE = math.ceil(ROWS / THREADS)
 
-PROGRESS_BARS = enlighten.get_manager()
+#CONSTS
 
 API  = PlacekeyAPI("gzOGnw0x8SsiJ4cM4TzI4F9yesp1Oul4")
 
+PROGRESS_BARS = enlighten.get_manager()
+
+#Functions & Classes
+
 class TempWrapper():
     
-    def __init__(self, file_name):
-        self.path = f'{PATH_TEMP}/{file_name}.json'
+    def __init__(self, id):
+        self.path = f'{PATH_TEMP}/Thread - {id}.json'
         
         if not os.path.isfile(self.path):
             open(self.path, 'a').close()
@@ -55,88 +60,47 @@ class TempWrapper():
         with open(self.path, 'w') as f:
             json.dump(self.blocks, f)
 
-class ExecutionThread():
-
-    def __init__(self, id, input):
-        self.id = id
-        self.input = input
-        self.output = list()
-        self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'{id}')
-        self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
-
-    def start(self):
-        self.thread.start()
-
-    def on_stop(self):
-        for set in self.output:
-            for _, entry in enumerate(set):
-                GLOBAL_RES.append(entry)
+def process(chunk, index):
     
-    def get_id(self):
-        return self.id
+    res = list()
 
-    def get_name(self):
-        return self.thread.name
+    wrapper = TempWrapper(index)
+    iterations = math.ceil(len(chunk) / BATCH_SIZE)
 
-    def get_input(self):
-        return self.input
-
-    def get_section(self, lower, higher):
-        return self.input[lower:higher]
-
-    def get_output(self):
-        return self.output
+    progress_bar = PROGRESS_BARS.counter(total=iterations, desc=f"Processing > Worker {index}", unit="batches")
     
-    def size(self):
-        return len(self.input)
+    for i in range(iterations):
 
-    def get_iterations(self):
-        return math.ceil(self.size() / BATCH_SIZE)
+        progress_bar.update()
 
-    def append(self, array):
-        self.output.append(array)
+        section = chunk[i * BATCH_SIZE:(i+1) * BATCH_SIZE]
+        block = wrapper.get_block(section[0]['query_id'])
 
-    def get_thread(self):
-        return self.thread
+        lookup = list()
 
-    @staticmethod
-    def process(target):
-        
-        for i in range(target.get_iterations()):
+        if block is not None:
+            lookup = block
+            res.append(lookup)
+            continue
 
-            target.get_progress_bar().update()
+        try:
+            lookup = API.lookup_placekeys(section)
 
-            section = target.get_section(i * BATCH_SIZE, min((i+1) * BATCH_SIZE, target.size()))
-            block = target.get_temp().get_block(section[0]['query_id'])
+        except:
+            for entry in section:
+                lookup.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
 
-            if block is not None:
-                target.append(block)
-                continue
-        
-            try:
-                lookup = API.lookup_placekeys(section)
-                target.append(lookup)
+        res.append(lookup)
+        wrapper.new_block(lookup)
+        wrapper.save()
 
-                target.get_temp().new_block(lookup)
-                target.get_temp().save()
-            except:
+    return res 
 
-                lst = list()
+def get_chunks(input, sub_size):
+    for i in range(0, len(input), sub_size):
+        yield input[i:i + sub_size]
 
-                for entry in section:
-                    lst.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
-
-                target.append(lst)
-       
-        target.on_stop()
-
-        return
-
-    @staticmethod
-    def get_chunks(input, sub_size):
-        for i in range(0, len(input), sub_size):
-            yield input[i:i + sub_size]
-
+#Execution
 
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
 extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
@@ -154,21 +118,27 @@ for index, entry in df.iterrows():
         "iso_country_code": ISO_CODE
     }))
 
-threads = list()
-chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 
-for i in range(THREADS):
-    threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
-    threads[i].start()
 
-for thread in threads:
-    thread.get_thread().join()
+chunks = list(get_chunks(data, CHUNK_SIZE))
 
-PROGRESS_BARS.stop()
-print('\r\n')
+futures = []
+
+with ThreadPoolExecutor(max_workers=THREADS) as executor:
+
+    for i, chunk in enumerate(chunks):
+        futures.append(executor.submit(process, chunk, i))
+        
+
+res = list()
+for future in as_completed(futures):
+    for iteration in future.result():
+        for elem in iteration:
+            res.append(elem)
 
 values = list()
-for i, e in enumerate(sorted(GLOBAL_RES, key=lambda x: x['query_id'])):
+
+for i, e in enumerate(res):
     try:
         values.append(e['placekey'])
     except KeyError:
@@ -182,3 +152,5 @@ df["placekey"] = values
 df.to_csv(FILE_OUT)
 
 [f.unlink() for f in pathlib.Path(PATH_TEMP).glob("*") if f.is_file()] 
+
+PROGRESS_BARS.stop()
