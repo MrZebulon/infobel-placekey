@@ -21,12 +21,10 @@ PATH_TEMP= "./temp"
 FILE_IN = f'{PATH_IN}/{COUNTRY}.csv'
 FILE_OUT = f'{PATH_OUT}/{COUNTRY}_' + '{0}' + '_out.csv'
 
-ROWS = 900
+ROWS = 800
 ROWS_OFFSET = 100
 BATCH_SIZE = 250
 MAX_THREADS = 2
-
-BATCHES = math.ceil(ROWS / BATCH_SIZE)
 
 #CONSTS
 
@@ -45,25 +43,24 @@ def process(index, batch, data, progression):
 
     except:
         for entry in len(batch):
-            lookup.append({'query_id' : entry['query_id'], 'error': 'Unknown error'})
+            lookup.append({'query_id' : entry['query_id'], 'placeholder': ''})
     
-    progression.update()
-
     for entry in lookup:
         try:
-            data["placekey"] = lookup['placekey']
+            data["placekey"] = entry['placekey']
         except:
             data["placekey"] = 'Error'
 
     data.to_csv(FILE_OUT.format(index), sep="|")
+    progression.update()
 
 
 def get_batch(input, index):
-    return input[ROWS_OFFSET + index * BATCH_SIZE: ROWS_OFFSET + (index+1) *BATCH_SIZE]
+    return input[index * BATCH_SIZE: (index+1) *BATCH_SIZE]
 
 
-def get_sub_dataframe(dataframe, index):
-    return dataframe.iloc[ROWS_OFFSET + index * BATCH_SIZE: ROWS_OFFSET + (index+1) *BATCH_SIZE, : ]
+def get_sub_dataframe(dataframe, lower, upper):
+    return dataframe.iloc[lower:upper, : ]
 
 #Execution
 
@@ -72,7 +69,7 @@ extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction",
 
 data = list()
 
-for index, entry in df.iloc[ROWS_OFFSET : ROWS_OFFSET + ROWS, : ].iterrows():
+for index, entry in get_sub_dataframe(df, ROWS_OFFSET, ROWS_OFFSET + ROWS).iterrows():
     extraction_progress_bar.update()
     data.append(dict({
         "query_id": str(index),
@@ -83,12 +80,15 @@ for index, entry in df.iloc[ROWS_OFFSET : ROWS_OFFSET + ROWS, : ].iterrows():
         "iso_country_code": ISO_CODE
     }))
 
-processing_progression_bar = PROGRESS_BARS.counter(total = BATCHES, desc="Processing", unit="entries", color="white")
+
+batches = math.ceil(len(data) / BATCH_SIZE)
+
+processing_progression_bar = PROGRESS_BARS.counter(total = batches, desc="Processing", unit="entries", color="white")
 
 with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
 
-    for i in range(BATCHES):
-        executor.submit(process, i, get_batch(data, i), get_sub_dataframe(df, i), processing_progression_bar)
+    for i in range(batches):
+        executor.submit(process, i, get_batch(data, i), get_sub_dataframe(df, ROWS_OFFSET + i * BATCH_SIZE , ROWS_OFFSET + (i+1) *BATCH_SIZE), processing_progression_bar)
         
 
 PROGRESS_BARS.stop()
