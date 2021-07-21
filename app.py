@@ -33,7 +33,6 @@ class ExecutionThread():
         self.output = list()
         self.thread = threading.Thread(target=ExecutionThread.process, args=(self,), name=f'{id}')
         self.progress_bar = PROGRESS_BARS.counter(total=self.get_iterations(), desc=f"Processing > {self.get_name()}", unit="batches")
-        self.finished = False
 
     def start(self):
         self.thread.start()
@@ -42,8 +41,6 @@ class ExecutionThread():
         for set in self.output:
             for _, entry in enumerate(set):
                 GLOBAL_RES.append(entry)
-
-        self.finished = True
     
     def get_id(self):
         return self.id
@@ -59,9 +56,6 @@ class ExecutionThread():
 
     def get_output(self):
         return self.output
-
-    def is_finished(self):
-        return self.finished
     
     def size(self):
         return len(self.input)
@@ -100,14 +94,6 @@ class ExecutionThread():
         for i in range(0, len(input), sub_size):
             yield input[i:i + sub_size]
 
-    @classmethod
-    def finished(clz, thread_lst):
-        for thread in thread_lst:
-            if not thread.is_finished():
-                return False
-        return True
-
-
 
 df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
 extract_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
@@ -131,12 +117,9 @@ chunks = list(ExecutionThread.get_chunks(data, CHUNK_SIZE))
 for i in range(THREADS):
     threads.append(ExecutionThread(f"Thread - {i}", chunks[i]))
     threads[i].start()
-    time.sleep(0.2)
 
-print('\r\n')
-
-while not ExecutionThread.finished(threads):
-    time.sleep(1)
+for thread in threads:
+    thread.join()
 
 PROGRESS_BARS.stop()
 print('\r\n')
