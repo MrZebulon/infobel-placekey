@@ -1,4 +1,3 @@
-from re import L
 import pandas as pd
 from placekey.api import PlacekeyAPI
 import enlighten
@@ -9,22 +8,22 @@ pd.options.mode.chained_assignment = None
 
 #PARAMS
 
-COL_OFFSET = 4
+COL_OFFSET = 0
 
-COUNTRY = "small-US"
-ISO_CODE = "US"
+COUNTRY = "canada"
+ISO_CODE = "ca"
 
 PATH_IN= "./res"
 PATH_OUT= "./out"
 PATH_TEMP= "./temp"
 
-FILE_IN = f'{PATH_IN}/{COUNTRY}.csv'
-FILE_OUT = f'{PATH_OUT}/{COUNTRY}_' + '{0}' + '_out.csv'
+FILE_IN = f'{PATH_IN}/{COUNTRY}.txt'
+FILE_OUT = f'{PATH_OUT}/{COUNTRY}_' + '{0}' + '_out.txt'
 
-ROWS = 800
-ROWS_OFFSET = 100
-BATCH_SIZE = 250
-MAX_THREADS = 2
+ROWS = 2000
+ROWS_OFFSET = 26000
+BATCH_SIZE = 2000
+MAX_THREADS = 1
 
 #CONSTS
 
@@ -37,6 +36,7 @@ PROGRESS_BARS = enlighten.get_manager()
 def process(index, batch, data, progression):
     
     lookup = list()
+    batch_id = batch[0]['query_id']
 
     try:
         lookup = API.lookup_placekeys(batch)
@@ -51,7 +51,7 @@ def process(index, batch, data, progression):
         except:
             data["placekey"] = 'Error'
 
-    data.to_csv(FILE_OUT.format(index), sep="|")
+    data.to_csv(FILE_OUT.format(batch_id), sep="|")
     progression.update()
 
 
@@ -64,7 +64,7 @@ def get_sub_dataframe(dataframe, lower, upper):
 
 #Execution
 
-df = pd.read_table(FILE_IN, sep=',', encoding="utf_8")
+df = pd.read_table(FILE_IN, sep='|', encoding="utf_8")
 extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
 
 data = list()
