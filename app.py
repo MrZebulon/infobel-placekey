@@ -20,10 +20,10 @@ PATH_TEMP= "./temp"
 FILE_IN = f'{PATH_IN}/{COUNTRY}.txt'
 FILE_OUT = f'{PATH_OUT}/{COUNTRY}_' + '{0}' + '_out.txt'
 
-ROWS = 2000
-ROWS_OFFSET = 26000
+ROWS = 250000
+ROWS_OFFSET = 2020000
 BATCH_SIZE = 2000
-MAX_THREADS = 1
+MAX_THREADS = 8
 
 #CONSTS
 
@@ -45,13 +45,19 @@ def process(index, batch, data, progression):
         for entry in len(batch):
             lookup.append({'query_id' : entry['query_id'], 'placeholder': ''})
     
+    values = list()
+
     for entry in lookup:
         try:
-            data["placekey"] = entry['placekey']
+            values.append(entry['placekey'])
         except:
-            data["placekey"] = 'Error'
+            values.append('Error')
 
+    data['placekey'] = values
     data.to_csv(FILE_OUT.format(batch_id), sep="|")
+    
+    del data, batch, values, lookup
+
     progression.update()
 
 
