@@ -65,7 +65,7 @@ def get_sub_dataframe(dataframe, lower, upper):
 #Execution
 
 df = pd.read_table(FILE_IN, sep='|', encoding="utf_8")
-extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entries", color="red")
+extraction_progress_bar = PROGRESS_BARS.counter(total = ROWS, desc="Extraction", unit="entry", color="red")
 
 data = list()
 
@@ -83,7 +83,7 @@ for index, entry in get_sub_dataframe(df, ROWS_OFFSET, ROWS_OFFSET + ROWS).iterr
 
 batches = math.ceil(len(data) / BATCH_SIZE)
 
-processing_progression_bar = PROGRESS_BARS.counter(total = batches, desc="Processing", unit="entries", color="white")
+processing_progression_bar = PROGRESS_BARS.counter(total = batches, desc="Processing", unit="batch", color="white")
 
 with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
 
